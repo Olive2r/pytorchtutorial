@@ -14,12 +14,18 @@ from imageio import imread
 from PIL import Image
 from captum.attr import IntegratedGradients
 import os
+
+import wrappers
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=3):
+def caption_image_beam_search(encoder,
+                              decoder,
+                              image_path,
+                              word_map,
+                              beam_size=3):
     """
     Reads an image and captions it with beam search.
 
@@ -38,32 +44,37 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
     img = imageio.imread(image_path)
     if len(img.shape) == 2:  #256*256*3 此处无RGB维度
         img = img[:, :, np.newaxis]
-        img = np.concatenate([img, img, img], axis=2) #连接第二列颜色列
+        img = np.concatenate([img, img, img], axis=2)  #连接第二列颜色列
     img = np.array(Image.fromarray(np.uint8(img)).resize((256, 256)))
     # img = imresize(img, (256, 256))
     img = img.transpose(2, 0, 1)  # 把RGB列向量移到第一列（pytorch格式）
     img = img / 255.  # 图片归一化
     img = torch.FloatTensor(img).to(device)  #pytorch规范为浮点
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], # (x-mean)/std
-                                     std=[0.229, 0.224, 0.225])  # std为标准差（mean 和 std 均为 imagenet 预设值）
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],  # (x-mean)/std
+        std=[0.229, 0.224, 0.225])  # std为标准差（mean 和 std 均为 imagenet 预设值）
     transform = transforms.Compose([normalize])
     image = transform(img)  # (3, 256, 256) 变为pytorch tensor
 
     # Encode
     image = image.unsqueeze(0)  # (1, 3, 256, 256)
-    encoder_out = encoder(image)  # (1, enc_image_size, enc_image_size, encoder_dim)
+    encoder_out = encoder(
+        image)  # (1, enc_image_size, enc_image_size, encoder_dim)
     enc_image_size = encoder_out.size(1)  # 获得第一维
     encoder_dim = encoder_out.size(3)  #获得第三维
 
     # Flatten encoding
-    encoder_out = encoder_out.view(1, -1, encoder_dim)  # (1, num_pixels, encoder_dim)
+    encoder_out = encoder_out.view(1, -1,
+                                   encoder_dim)  # (1, num_pixels, encoder_dim)
     num_pixels = encoder_out.size(1)  # redundant
 
     # We'll treat the problem as having a batch size of k
-    encoder_out = encoder_out.expand(k, num_pixels, encoder_dim)  # (k, num_pixels, encoder_dim)
+    encoder_out = encoder_out.expand(
+        k, num_pixels, encoder_dim)  # (k, num_pixels, encoder_dim)
 
     # Tensor to store top k previous words at each step; now they're just <start>
-    k_prev_words = torch.LongTensor([[word_map['<start>']]] * k).to(device)  # (k, 1)
+    k_prev_words = torch.LongTensor([[word_map['<start>']]] * k).to(
+        device)  # (k, 1)
 
     # Tensor to store top k sequences; now they're just <start>
     seqs = k_prev_words  # (k, 1)
@@ -72,9 +83,10 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
     top_k_scores = torch.zeros(k, 1).to(device)  # (k, 1)
 
     # Tensor to store top k sequences' alphas; now they're just 1s
-    seqs_alpha = torch.ones(k, 1, enc_image_size, enc_image_size).to(device)  # (k, 1, enc_image_size, enc_image_size)
+    seqs_alpha = torch.ones(k, 1, enc_image_size, enc_image_size).to(
+        device)  # (k, 1, enc_image_size, enc_image_size)
 
-    # Lists to store completed sequences, their alphas and scores   
+    # Lists to store completed sequences, their alphas and scores
     complete_seqs = list()
     complete_seqs_alpha = list()
     complete_seqs_scores = list()
@@ -86,16 +98,22 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
     # s is a number less than or equal to k, because sequences are removed from this process once they hit <end>
     while True:
 
-        embeddings = decoder.embedding(k_prev_words).squeeze(1)  # (s, embed_dim)
+        embeddings = decoder.embedding(k_prev_words).squeeze(
+            1)  # (s, embed_dim)
 
-        awe, alpha = decoder.attention(encoder_out, h)  # (s, encoder_dim), (s, num_pixels)
+        awe, alpha = decoder.attention(encoder_out,
+                                       h)  # (s, encoder_dim), (s, num_pixels)
 
-        alpha = alpha.view(-1, enc_image_size, enc_image_size)  # (s, enc_image_size, enc_image_size)
+        alpha = alpha.view(
+            -1, enc_image_size,
+            enc_image_size)  # (s, enc_image_size, enc_image_size)
 
-        gate = decoder.sigmoid(decoder.f_beta(h))  # gating scalar, (s, encoder_dim)
+        gate = decoder.sigmoid(
+            decoder.f_beta(h))  # gating scalar, (s, encoder_dim)
         awe = gate * awe
 
-        h, c = decoder.decode_step(torch.cat([embeddings, awe], dim=1), (h, c))  # (s, decoder_dim)
+        h, c = decoder.decode_step(torch.cat([embeddings, awe], dim=1),
+                                   (h, c))  # (s, decoder_dim)
         # print(gate.shape, embeddings.shape, awe.shape)
         scores = decoder.fc(h)  # (s, vocab_size)
         scores = F.log_softmax(scores, dim=1)
@@ -108,21 +126,28 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
             top_k_scores, top_k_words = scores[0].topk(k, 0, True, True)  # (s)
         else:
             # Unroll and find top scores, and their unrolled indices
-            top_k_scores, top_k_words = scores.view(-1).topk(k, 0, True, True)  # (s)
+            top_k_scores, top_k_words = scores.view(-1).topk(k, 0, True,
+                                                             True)  # (s)
 
         # Convert unrolled indices to actual indices of scores
         prev_word_inds = top_k_words / vocab_size  # (s)
         next_word_inds = top_k_words % vocab_size  # (s)
 
         # Add new words to sequences, alphas
-        seqs = torch.cat([seqs[prev_word_inds], next_word_inds.unsqueeze(1)], dim=1)  # (s, step+1)
-        seqs_alpha = torch.cat([seqs_alpha[prev_word_inds], alpha[prev_word_inds].unsqueeze(1)],
-                               dim=1)  # (s, step+1, enc_image_size, enc_image_size)
+        seqs = torch.cat([seqs[prev_word_inds],
+                          next_word_inds.unsqueeze(1)],
+                         dim=1)  # (s, step+1)
+        seqs_alpha = torch.cat(
+            [seqs_alpha[prev_word_inds], alpha[prev_word_inds].unsqueeze(1)],
+            dim=1)  # (s, step+1, enc_image_size, enc_image_size)
 
         # Which sequences are incomplete (didn't reach <end>)?
-        incomplete_inds = [ind for ind, next_word in enumerate(next_word_inds) if
-                           next_word != word_map['<end>']]
-        complete_inds = list(set(range(len(next_word_inds))) - set(incomplete_inds))
+        incomplete_inds = [
+            ind for ind, next_word in enumerate(next_word_inds)
+            if next_word != word_map['<end>']
+        ]
+        complete_inds = list(
+            set(range(len(next_word_inds))) - set(incomplete_inds))
 
         # Set aside complete sequences
         if len(complete_inds) > 0:
@@ -176,13 +201,21 @@ def visualize_att(image_path, seq, alphas, rev_word_map, smooth=True):
             break
         plt.subplot(np.ceil(len(words) / 5.), 5, t + 1)
 
-        plt.text(0, 1, '%s' % (words[t]), color='black', backgroundcolor='white', fontsize=12)
+        plt.text(0,
+                 1,
+                 '%s' % (words[t]),
+                 color='black',
+                 backgroundcolor='white',
+                 fontsize=12)
         plt.imshow(image)
         current_alpha = alphas[t, :]
         if smooth:
-            alpha = skimage.transform.pyramid_expand(current_alpha.numpy(), upscale=24, sigma=8)
+            alpha = skimage.transform.pyramid_expand(current_alpha.numpy(),
+                                                     upscale=24,
+                                                     sigma=8)
         else:
-            alpha = skimage.transform.resize(current_alpha.numpy(), [14 * 24, 14 * 24])
+            alpha = skimage.transform.resize(current_alpha.numpy(),
+                                             [14 * 24, 14 * 24])
         if t == 0:
             plt.imshow(alpha, alpha=0)
         else:
@@ -193,13 +226,39 @@ def visualize_att(image_path, seq, alphas, rev_word_map, smooth=True):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Show, Attend, and Tell - Tutorial - Generate Caption')
+    parser = argparse.ArgumentParser(
+        description='Show, Attend, and Tell - Tutorial - Generate Caption')
 
-    parser.add_argument('--img', '-i', help='path to image',default='D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\COCO_train2014_000000000036.jpeg')# D:\\hxy\\    /home/ubuntu
-    parser.add_argument('--model', '-m', help='path to model',default='D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar')
-    parser.add_argument('--word_map', '-wm', help='path to word map JSON',default='D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\caption_datasets\\WORDMAP_coco_5_cap_per_img_5_min_word_freq.json')
-    parser.add_argument('--beam_size', '-b', default=5, type=int, help='beam size for beam search')
-    parser.add_argument('--dont_smooth', dest='smooth', action='store_false', help='do not smooth alpha overlay')
+    parser.add_argument(
+        '--img',
+        '-i',
+        help='path to image',
+        default=
+        'D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\COCO_train2014_000000000036.jpeg'
+    )  # D:\\hxy\\    /home/ubuntu
+    parser.add_argument(
+        '--model',
+        '-m',
+        help='path to model',
+        default=
+        'D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'
+    )
+    parser.add_argument(
+        '--word_map',
+        '-wm',
+        help='path to word map JSON',
+        default=
+        'D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\caption_datasets\\WORDMAP_coco_5_cap_per_img_5_min_word_freq.json'
+    )
+    parser.add_argument('--beam_size',
+                        '-b',
+                        default=5,
+                        type=int,
+                        help='beam size for beam search')
+    parser.add_argument('--dont_smooth',
+                        dest='smooth',
+                        action='store_false',
+                        help='do not smooth alpha overlay')
 
     args = parser.parse_args()
 
@@ -218,115 +277,70 @@ if __name__ == '__main__':
     rev_word_map = {v: k for k, v in word_map.items()}  # ix2word
 
     # Encode, decode with attention and beam search
-    seq, alphas = caption_image_beam_search(encoder, decoder, args.img, word_map, args.beam_size)
+    seq, alphas = caption_image_beam_search(encoder, decoder, args.img,
+                                            word_map, args.beam_size)
     alphas = torch.FloatTensor(alphas)
 
     # Visualize caption and attention of best sequence
     visualize_att(args.img, seq, alphas, rev_word_map, args.smooth)
 
-class wrapper(object):
-    def __init__(self, pytorch_model):
-        self.model = pytorch_model.cuda()
+    # Read image and process
+    img = imageio.imread(
+        'D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\COCO_train2014_000000000036.jpeg'
+    )
+    if len(img.shape) == 2:  #256*256*3 此处无RGB维度
+        img = img[:, :, np.newaxis]
+        img = np.concatenate([img, img, img], axis=2)  #连接第二列颜色列
+    img = np.array(Image.fromarray(np.uint8(img)).resize((256, 256)))
+    # img = imresize(img, (256, 256))
+    img = img.transpose(2, 0, 1)  # 把RGB列向量移到第一列（pytorch格式）
+    img = img / 255.  # 图片归一化
+    img = torch.FloatTensor(img).to(device)  #pytorch规范为浮点
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],  # (x-mean)/std
+        std=[0.229, 0.224, 0.225])  # std为标准差（mean 和 std 均为 imagenet 预设值）
+    transform = transforms.Compose([normalize])
+    image = transform(img)  # (3, 256, 256) 变为pytorch tensor
+    image = image.unsqueeze(0)
+    #RuntimeError: Expected 4-dimensional input for 4-dimensional weight 64 3 7 7, but got 3-dimensional input of size [3, 256, 256] instead
 
-    def call(self, X, Y, target_word, word_map): #如何获取Y?
-        encoder = Encoder(encoded_image_size=14)
-        # z = encoder.forward(X)
-        seq = torch.LongTensor([[word_map['<start>']]]).to(device)
+    # wrapper = wrapper(args.model)
+    # prob = wrapper.call(image, seq, word_map['<start>'], word_map)
+    # print(prob)
 
-        decoder = DecoderWithAttention(attention_dim=512, embed_dim=512, decoder_dim=512, vocab_size=len(word_map), encoder_dim=2048, dropout=0.5)
-        i = 0
+    wrapped_model = wrappers.Net(args.model, word_idx=0, device=device)
 
-        # k = 3 #beam_size
-        # vocab_size = len(word_map)
+    num_words = len(word_map)
 
-        # Read image and process
-        img = imageio.imread('D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\COCO_train2014_000000000036.jpeg')
-        if len(img.shape) == 2:  # 256*256*3 此处无RGB维度
-            img = img[:, :, np.newaxis]
-            img = np.concatenate([img, img, img], axis=2)  # 连接第二列颜色列
-        img = np.array(Image.fromarray(np.uint8(img)).resize((256, 256)))
-        img = img.transpose(2, 0, 1)  # 把RGB列向量移到第一列（pytorch格式）
-        img = img / 255.  # 图片归一化
-        img = torch.FloatTensor(img).to(device)  # pytorch规范为浮点
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],  # (x-mean)/std
-                                         std=[0.229, 0.224, 0.225])  # std为标准差（mean 和 std 均为 imagenet 预设值）
-        transform = transforms.Compose([normalize])
-        image = transform(img)  # (3, 256, 256) 变为pytorch tensor
+    for i, t in enumerate(seq):
+        wrapped_model.word_idx = i
+        prob_for_every_word = wrapped_model(image, word_map, seq)
+        print(prob_for_every_word.shape)
 
-        # Encode
-        image = image.unsqueeze(0)  # (1, 3, 256, 256)
-        z = encoder(image)  # (1, enc_image_size, enc_image_size, encoder_dim)
-        enc_image_size = z.size(1)  # 获得第一维
-        encoder_dim = z.size(3)
-        z = z.view(1, -1, encoder_dim)
-        z = z.expand(1, enc_image_size, encoder_dim)
-        h, c = decoder.init_hidden_state(z)
-        # top_k_scores = torch.zeros(1, 1).to(device)
-
-        while i < len(word_map):
-
-            embeddings = decoder.embedding(seq).squeeze(1)  # (s, embed_dim)
-
-            awe, alpha = decoder.attention(z, h)  # (s, encoder_dim), (s, num_pixels)
-
-            # alpha = alpha.view(-1, z.size(1), z.size(1))  # (s, enc_image_size, enc_image_size)
-
-            gate = decoder.sigmoid(decoder.f_beta(h))  # gating scalar, (s, encoder_dim)
-            awe = gate * awe
-            # print(gate.shape, embeddings.shape, awe.shape)
-            h, c = decoder.decode_step(torch.cat([embeddings, awe], dim=1), (h, c))  # (s, decoder_dim)
-
-            scores = decoder.fc(h)  # (s, vocab_size)
-            scores = F.log_softmax(scores, dim=1)
-
-            # scores = top_k_scores.expand_as(scores) + scores  # (s, vocab_size)
-            print(scores)
-            # if i == target_word:
-            #      h, vec = decoder(h, seq, torch.tensor([len(Y)]).view(1, 1))
-            #      target_word_to_explain = vec[Y[i]]
-            #      return target_word_to_explain
-            #  else:
-            #      h = decoder(h, seq, torch.tensor([len(Y)]).view(1, 1))
-            #      seq.append(Y[i])
+        # attribute = IntegratedGradients(wrapped_model)
+        # attribution = attribute.attribute(input, target=t)
 
 
-# Read image and process
-img = imageio.imread('D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\COCO_train2014_000000000036.jpeg')
-if len(img.shape) == 2:  #256*256*3 此处无RGB维度
-     img = img[:, :, np.newaxis]
-     img = np.concatenate([img, img, img], axis=2) #连接第二列颜色列
-img = np.array(Image.fromarray(np.uint8(img)).resize((256, 256)))
-# img = imresize(img, (256, 256))
-img = img.transpose(2, 0, 1)  # 把RGB列向量移到第一列（pytorch格式）
-img = img / 255.  # 图片归一化
-img = torch.FloatTensor(img).to(device)  #pytorch规范为浮点
-normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], # (x-mean)/std
-                                 std=[0.229, 0.224, 0.225])  # std为标准差（mean 和 std 均为 imagenet 预设值）
-transform = transforms.Compose([normalize])
-image = transform(img)  # (3, 256, 256) 变为pytorch tensor
-image = image.unsqueeze(0)
-#RuntimeError: Expected 4-dimensional input for 4-dimensional weight 64 3 7 7, but got 3-dimensional input of size [3, 256, 256] instead
 
-wrapper = wrapper(args.model)
-prob = wrapper.call(image, seq, word_map['<start>'], word_map)
-print(prob)
-# c = 9489
-# i = 0
-# #for i in range(0,8):
-# a1 = np.zeros((c, 1+i))
-# b1 = np.ones((c, 1))
-# c1 = np.zeros((c, 9-i))
-# d1 = np.hstack((b1, c1))
-# H = np.hstack((a1, d1))
-#
-#
-# net = Model_To_Explain(model.forward(model, device), H)
-# attribute = IntegratedGradients(net)
-#
-# image = Image.open(args.img)
-# image = image.resize([14 * 24, 14 * 24], Image.LANCZOS)
-# input = torch.from_numpy(np.asarray(image))
-# print(input)
-# attribution = attribute.attribute(input, target = i)
+    
 
 
+
+    # c = 9489
+    # i = 0
+    # #for i in range(0,8):
+    # a1 = np.zeros((c, 1+i))
+    # b1 = np.ones((c, 1))
+    # c1 = np.zeros((c, 9-i))
+    # d1 = np.hstack((b1, c1))
+    # H = np.hstack((a1, d1))
+    #
+    #
+    # net = Model_To_Explain(model.forward(model, device), H)
+    # attribute = IntegratedGradients(net)
+    #
+    # image = Image.open(args.img)
+    # image = image.resize([14 * 24, 14 * 24], Image.LANCZOS)
+    # input = torch.from_numpy(np.asarray(image))
+    # print(input)
+    # attribution = attribute.attribute(input, target = i)
