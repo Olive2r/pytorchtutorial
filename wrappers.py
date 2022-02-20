@@ -4,6 +4,7 @@ import torch
 class Net(torch.nn.Module):
     def __init__(self, model, word_idx=0, device='cuda:0'):
         # Load model
+        super().__init__()
         checkpoint = torch.load(model, map_location=str(device))
         decoder = checkpoint['decoder']
         decoder = decoder.to(device)
@@ -14,35 +15,31 @@ class Net(torch.nn.Module):
         self.device = device
         self.word_idx = word_idx
 
-    def forward(self, image, seq):
-        z = self.encoder(
-            image)  # (1, enc_image_size, enc_image_size, encoder_dim)
-        enc_image_size = z.size(1)  # 获得第一维
+    def forward(self, image, seq, word_map):
+        z = self.encoder(image)  # (1, enc_image_size, enc_image_size, encoder_dim)
+        # enc_image_size = z.size(1)  # 获得第一维
         encoder_dim = z.size(3)
         z = z.view(1, -1, encoder_dim)
-        z = z.expand(1, enc_image_size, encoder_dim)
+        # z = z.expand(1, enc_image_size, encoder_dim)
         h, c = self.decoder.init_hidden_state(z)
+        # print(seq)
+        embeddings = self.decoder.embedding(torch.tensor([word_map['<start>']]).cuda()).squeeze(1)  # (s, embed_dim)
 
-        embeddings = self.decoder.embedding(seq).squeeze(
-            1)  # (s, embed_dim)
-
-        awe, alpha = self.decoder.attention(
-            z, h)  # (s, encoder_dim), (s, num_pixels)
+        awe, alpha = self.decoder.attention(z, h)  # (s, encoder_dim), (s, num_pixels)
 
         # alpha = alpha.view(-1, z.size(1), z.size(1))  # (s, enc_image_size, enc_image_size)
 
-        gate = self.decoder.sigmoid(
-            self.decoder.f_beta(h))  # gating scalar, (s, encoder_dim)
+        gate = self.decoder.sigmoid(self.decoder.f_beta(h))  # gating scalar, (s, encoder_dim)
         awe = gate * awe
         # print(gate.shape, embeddings.shape, awe.shape)
-        h, c = self.decoder.decode_step(torch.cat([embeddings, awe],
-                                                    dim=1),
-                                        (h, c))  # (s, decoder_dim)
-
+        h, c = self.decoder.decode_step(torch.cat([embeddings, awe], dim=1), (h, c))  # (s, decoder_dim)
         scores = self.decoder.fc(h)  # (s, vocab_size)
         scores = torch.nn.functional.log_softmax(scores, dim=1)
 
-        return scores[self.word_idx] # (vocab_size, )
+        # add = torch.cat([scores.view(9490, 1)], dim=1)
+        # output = torch.cat([add.unsqueeze(1).view(9490, 1)], dim=1)
+        # print(output.shape)
+        return scores # (vocab_size, )
 
 
 # class wrapper(object):

@@ -132,11 +132,12 @@ def caption_image_beam_search(encoder,
         # Convert unrolled indices to actual indices of scores
         prev_word_inds = top_k_words / vocab_size  # (s)
         next_word_inds = top_k_words % vocab_size  # (s)
-
+        # print(top_k_words, vocab_size)
         # Add new words to sequences, alphas
         seqs = torch.cat([seqs[prev_word_inds],
                           next_word_inds.unsqueeze(1)],
                          dim=1)  # (s, step+1)
+        # print(seqs)
         seqs_alpha = torch.cat(
             [seqs_alpha[prev_word_inds], alpha[prev_word_inds].unsqueeze(1)],
             dim=1)  # (s, step+1, enc_image_size, enc_image_size)
@@ -250,15 +251,8 @@ if __name__ == '__main__':
         default=
         'D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\caption_datasets\\WORDMAP_coco_5_cap_per_img_5_min_word_freq.json'
     )
-    parser.add_argument('--beam_size',
-                        '-b',
-                        default=5,
-                        type=int,
-                        help='beam size for beam search')
-    parser.add_argument('--dont_smooth',
-                        dest='smooth',
-                        action='store_false',
-                        help='do not smooth alpha overlay')
+    parser.add_argument('--beam_size','-b',default=5,type=int,help='beam size for beam search')
+    parser.add_argument('--dont_smooth',dest='smooth',action='store_false',help='do not smooth alpha overlay')
 
     args = parser.parse_args()
 
@@ -277,17 +271,14 @@ if __name__ == '__main__':
     rev_word_map = {v: k for k, v in word_map.items()}  # ix2word
 
     # Encode, decode with attention and beam search
-    seq, alphas = caption_image_beam_search(encoder, decoder, args.img,
-                                            word_map, args.beam_size)
+    seq, alphas = caption_image_beam_search(encoder, decoder, args.img,word_map, args.beam_size)
     alphas = torch.FloatTensor(alphas)
-
+    print(seq)
     # Visualize caption and attention of best sequence
     visualize_att(args.img, seq, alphas, rev_word_map, args.smooth)
 
     # Read image and process
-    img = imageio.imread(
-        'D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\COCO_train2014_000000000036.jpeg'
-    )
+    img = imageio.imread('D:\\Reaserch\\viax\\a-PyTorch-Tutorial-to-Image-Captioning-master\\COCO_train2014_000000000036.jpeg')
     if len(img.shape) == 2:  #256*256*3 此处无RGB维度
         img = img[:, :, np.newaxis]
         img = np.concatenate([img, img, img], axis=2)  #连接第二列颜色列
@@ -314,19 +305,24 @@ if __name__ == '__main__':
 
     for i, t in enumerate(seq):
         wrapped_model.word_idx = i
-        prob_for_every_word = wrapped_model(image, word_map, seq)
-        print(prob_for_every_word.shape)
+        prob_for_every_word = wrapped_model(image, seq, word_map)
+        # prob_for_every_word = prob_for_every_word.unsqueeze(dim=1)
+        # print(prob_for_every_word.shape)
+        prob_for_every_word = torch.transpose(prob_for_every_word, 1, 0)
+        # print(prob_for_every_word.shape)
+
+        if i == 0:
+            outputs = prob_for_every_word
+        else:
+            outputs = torch.cat([outputs, prob_for_every_word], dim=1)
+        # print(f'{outputs.shape}')
 
         # attribute = IntegratedGradients(wrapped_model)
         # attribution = attribute.attribute(input, target=t)
 
 
 
-    
-
-
-
-    # c = 9489
+    # c = 9490
     # i = 0
     # #for i in range(0,8):
     # a1 = np.zeros((c, 1+i))
