@@ -15,6 +15,9 @@ from PIL import Image
 from captum.attr import IntegratedGradients
 import os
 
+import captum
+from torch.autograd import Variable
+
 import wrappers
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -305,20 +308,59 @@ if __name__ == '__main__':
 
     for i, t in enumerate(seq):
         wrapped_model.word_idx = i
-        prob_for_every_word = wrapped_model(image, seq, word_map)
+        prob_for_every_word = wrapped_model(image, seq, word_map) # (1, C)
         # prob_for_every_word = prob_for_every_word.unsqueeze(dim=1)
         # print(prob_for_every_word.shape)
-        prob_for_every_word = torch.transpose(prob_for_every_word, 1, 0)
+        # prob_for_every_word = torch.transpose(prob_for_every_word, 1, 0)
         # print(prob_for_every_word.shape)
 
         if i == 0:
             outputs = prob_for_every_word
         else:
-            outputs = torch.cat([outputs, prob_for_every_word], dim=1)
+            outputs = torch.cat([outputs, prob_for_every_word], dim=0)
         # print(f'{outputs.shape}')
 
         # attribute = IntegratedGradients(wrapped_model)
         # attribution = attribute.attribute(input, target=t)
+    
+    print(outputs.shape) # (N, C)
+
+    all_attributions = []
+    for i, t in enumerate(seq):
+        
+         # Sentences always have a pattern like this: <START> ..... <END>
+         # We ignore the first and the last tokens.
+        if i == 0 or i == len(seq) - 1:
+            continue 
+
+        wrapped_model.word_idx = i
+
+        # TODO: try other attributions 
+        # url: https://captum.ai/api/
+        saliency = captum.attr.Saliency(wrapped_model)
+
+        # This is the explanation of t-th word in the i-th position w.r.t input image.
+        # per_attribution.shape == image.shape (3, H, W)
+
+        image_tensor = Variable(image.clone(), requires_grad=True)
+        per_attribution = saliency.attribute(image_tensor, target=t, additional_forward_args=(seq, word_map))
+        all_attributions.append(per_attribution[None]) # (1, 3, H, W) 
+    
+    all_attributions = torch.cat(all_attributions, dim=0) # (len(seq)-2, 3, H, W) 
+
+    all_attributions = torch.permute(all_attributions, (0, 2, 3, 1)) # (len(seq)-2, H, W, 3) 
+
+    all_attributions = all_attributions.detach().cpu().numpy()
+
+    # TODO: visualization
+
+
+
+
+
+
+
+
 
 
 
